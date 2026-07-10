@@ -34,15 +34,27 @@ def _onUpload(event):
     except (ValueError, TypeError):
         return
 
-    if isinstance(ref, dict) and ref.get('type') == 'slicer_cli.parameteroutput':
-        job = Job().load(ref['jobId'], force=True, exc=True)
+    if not isinstance(ref, dict):
+        return
 
-        file = event.info['file']
+    file = event.info['file']
+
+    if ref.get('type') == 'slicer_cli.parameteroutput':
+        job = Job().load(ref['jobId'], force=True, exc=True)
 
         # Add link to job model to the output item
         Job().updateJob(job, otherFields={
             'slicerCLIBindings.outputs.parameters': file['_id']
         })
+    elif ref.get('uuid') and ref.get('identifier'):
+        # Every CLI output reference carries the run uuid, so the produced file
+        # can be recorded on the job keyed by its output parameter.  A consumer
+        # then reads a job's outputs directly instead of watching the uploads.
+        job = Job().findOne({'slicerCLIBindings.runUuid': ref['uuid']})
+        if job:
+            Job().updateJob(job, otherFields={
+                'slicerCLIBindings.outputs.items.%s' % ref['identifier']: file['_id']
+            })
 
 
 class SlicerCLIWebPlugin(GirderPlugin):

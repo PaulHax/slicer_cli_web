@@ -284,10 +284,12 @@ def prepare_task(params, user, token, index_params, opt_params,
     from girder_worker.docker.transforms import VolumePath
     from girder_worker.docker.transforms.girder import GirderUploadVolumePathToFolder
 
-    uuidVal = str(uuid.uuid4())
     ca = []
     result_hooks = []
     primary_input_name = None
+    # A run-unique uuid on every output reference lets uploads be correlated
+    # with the job even when no primary Girder-model input exists.
+    reference['uuid'] = str(uuid.uuid4())
 
     templateParams = _addEnvironmentToTemplateParams(templateParams)
     templateParams = _populateTemplateParams(
@@ -307,7 +309,6 @@ def prepare_task(params, user, token, index_params, opt_params,
                     reference['fileId'] = str(value['_id'])
                     itemId = value['itemId']
                 reference['itemId'] = str(itemId)
-                reference['uuid'] = uuidVal
 
     # optional params
     for param in opt_params:

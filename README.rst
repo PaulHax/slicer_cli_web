@@ -143,6 +143,13 @@ CLI Endpoints
 
 Each exposed CLI is added as an endpoint using the REST path of ``slicer_cli_web/<docker image tag and version>/<cli command>/run`` and also using the REST path of ``slicer_cli_web/<internal item id>/run``, where ``<docker image tag and version>`` is the combined tag and version with slashes, colons, and at signs replaced by underscores.  All command line parameters can be passed as endpoint query parameters.  Input items, folders, and files are specified by their Girder ID.  Input images are specified by a Girder file ID.  Output files are specified by name and with an associated parameter with the same name plus a ``_folder`` suffix with a Girder folder ID.
 
+Correlating Outputs with Jobs
+=============================
+
+When a CLI job is scheduled, a uuid unique to that run is generated.  Every file uploaded as an output of the job carries this uuid in its upload ``reference`` (a JSON document that also identifies the output parameter and, when a primary Girder input exists, the input file and item).  The same uuid is stored on the job document as ``slicerCLIBindings.runUuid``, which is exposed at read access level.
+
+As each output is uploaded it is correlated back to its job by that uuid and recorded on the job under ``slicerCLIBindings.outputs.items``, keyed by the output parameter name and holding the produced file id.  A consumer can therefore read every output a job produced directly from the job document rather than observing the upload stream itself.
+
 Small Example CLI Docker
 ========================
 

@@ -10,6 +10,7 @@ from girder.models.collection import Collection
 from girder.models.folder import Folder
 from girder.models.item import Item
 from girder.models.token import Token
+from girder_jobs.models.job import Job
 from pytest_girder.assertions import assertStatusOk
 
 from slicer_cli_web import docker_resource, rest_slicer_cli
@@ -85,6 +86,44 @@ def test_genHandlerToRunDockerCLI(folder, file, handlerFunc):
     assert kwargs['pull_image'] == 'if-not-present'
     container_args = kwargs['container_args']
     assert container_args[0] == 'data'
+
+
+@pytest.mark.plugin('slicer_cli_web')
+def test_run_uuid_recorded_on_job(folder, file, handlerFunc):
+    job = handlerFunc(params={
+        'inputImageFile': str(file['_id']),
+        'secondImageFile': str(file['_id']),
+        'outputStainImageFile_1_folder': str(folder['_id']),
+        'outputStainImageFile_1': 'sample1.png',
+        'outputStainImageFile_2_folder': str(folder['_id']),
+        'outputStainImageFile_2_name': 'sample2.png',
+        'stainColor_1': '[0.5, 0.5, 0.5]',
+        'stainColor_2': '[0.2, 0.3, 0.4]',
+        'returnparameterfile_folder': str(folder['_id']),
+        'returnparameterfile': 'output.data',
+    })
+
+    runUuid = job['slicerCLIBindings']['runUuid']
+    assert runUuid
+    jobRecord = Job().load(job['_id'], force=True)
+    assert jobRecord['slicerCLIBindings']['runUuid'] == runUuid
+
+
+@pytest.mark.plugin('slicer_cli_web')
+def test_output_upload_recorded_on_job(server, admin, file):
+    from girder import events
+
+    job = Job().createJob(
+        title='j', type='slicer_cli_web', user=admin,
+        otherFields={'slicerCLIBindings': {'runUuid': 'run-1234'}})
+
+    events.trigger('data.process', info={
+        'file': file,
+        'reference': json.dumps({'uuid': 'run-1234', 'identifier': 'outputVolume'}),
+    })
+
+    job = Job().load(job['_id'], force=True)
+    assert job['slicerCLIBindings']['outputs']['items']['outputVolume'] == file['_id']
 
 
 @pytest.mark.plugin('slicer_cli_web')
