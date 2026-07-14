@@ -456,12 +456,18 @@ def genHandlerToRunDockerCLI(cliItem):  # noqa C901
         else:
             jobTitle = cliTitle
 
-        job_kwargs = cliItem.item.get('meta', {}).get('docker-params', {})
+        job_kwargs = dict(cliItem.item.get('meta', {}).get('docker-params', {}))
+        # Record the run uuid on the job before the task is published, so an
+        # output uploaded by a fast worker can always be correlated back to it.
+        other_fields = dict(job_kwargs.pop('girder_job_other_fields', {}))
+        other_fields['slicerCLIBindings'] = {
+            **other_fields.get('slicerCLIBindings', {}), 'runUuid': reference['uuid']}
         job = run.delay(
             girder_user=user,
             girder_job_type=jobType,
             girder_job_title=jobTitle,
             girder_result_hooks=result_hooks,
+            girder_job_other_fields=other_fields,
             image=cliItem.digest,
             pull_image='if-not-present',
             container_args=container_args,
