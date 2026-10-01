@@ -8,6 +8,7 @@ from girder_worker.docker.tasks import DockerTask, _docker_run
 from girder_worker.docker.transforms import BindMountVolume, ContainerStdOut
 from girder_worker.docker.transforms.girder import GirderFileIdToVolume
 from girder_worker_utils import _walk_obj
+from girder_worker_utils.transform import Transform
 from girder_worker_utils.transforms.girder_io import GirderClientTransform
 
 from .cli_progress import CLIProgressCLIWriter
@@ -67,6 +68,26 @@ class DirectGirderFileIdToVolume(GirderFileIdToVolume):
         return super().transform(**kwargs)
 
 
+class CommaJoinedVolumes(Transform):
+    """One container argument spanning several volume transforms: their
+    resolved container paths, comma-joined in order."""
+
+    def __init__(self, volumes):
+        self._volumes = volumes
+
+    def transform(self, **kwargs):
+        return ','.join(str(volume.transform(**kwargs)) for volume in self._volumes)
+
+    def cleanup(self, **kwargs):
+        for volume in self._volumes:
+            volume.cleanup(**kwargs)
+
+    def _repr_model_(self):
+        return '<%s.%s: [%s]>' % (
+            self.__module__, self.__class__.__name__,
+            ', '.join(volume._repr_model_() for volume in self._volumes))
+
+
 class GirderApiUrl(GirderClientTransform):
     def transform(self, **kwargs):
         return self.gc.urlBase
@@ -85,6 +106,9 @@ def _resolve_direct_file_paths(args, kwargs):
             path = arg.resolve_direct_file_path()
             if path:
                 extra_volumes.append(path)
+        elif isinstance(arg, CommaJoinedVolumes):
+            for volume in arg._volumes:
+                resolve(volume)
         return arg
     _walk_obj(args, resolve)
     _walk_obj(kwargs, resolve)
@@ -92,7 +116,20 @@ def _resolve_direct_file_paths(args, kwargs):
     return extra_volumes
 
 
+def _cancel_latched(task):
+    return getattr(task.request, '_slicer_cli_web_canceled', False)
+
+
 class DirectDockerTask(DockerTask):
+    @property
+    def canceled(self):
+        # Latch the first observed cancel: the base property re-inspects the
+        # broker on every read, so a later inspection that times out to False
+        # must not un-cancel a task the docker loop already stopped.
+        if not _cancel_latched(self):
+            self.request._slicer_cli_web_canceled = super().canceled
+        return self.request._slicer_cli_web_canceled
+
     def __call__(self, *args, **kwargs):
         extra_volumes = _resolve_direct_file_paths(args, kwargs)
         if extra_volumes:
@@ -104,7 +141,7 @@ class DirectDockerTask(DockerTask):
                 for extra_volume in extra_volumes:
                     volumes.update(extra_volume._repr_json_())
 
-        super().__call__(*args, **kwargs)
+        return super().__call__(*args, **kwargs)
 
 
 def _has_image(image):
@@ -140,4 +177,9 @@ def run(task, **kwargs):
             output=CLIProgressCLIWriter(task.job_manager)
         ))
 
-    return _docker_run(task, **kwargs)
+    results = _docker_run(task, **kwargs)
+    # Drop a canceled run's results so the upload hooks are skipped: the stopped
+    # container never wrote its outputs, and uploading nothing would fail the
+    # job as an error instead of a cancel.  Read the latch, not the broker, to
+    # keep successful runs free of an extra round-trip.
+    return () if _cancel_latched(task) else results

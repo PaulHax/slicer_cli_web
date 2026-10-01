@@ -1,8 +1,10 @@
 from os.path import basename
+from unittest import mock
 
 import pytest
 
 from slicer_cli_web.girder_worker_plugin.direct_docker_run import (TEMP_VOLUME_DIRECT_MOUNT_PREFIX,
+                                                                   CommaJoinedVolumes,
                                                                    DirectGirderFileIdToVolume, run)
 
 
@@ -54,3 +56,72 @@ def test_direct_docker_run(mocker, server, adminToken, file):
     assert kwargs['container_args'] == [target_path]
     # volumes
     assert len(kwargs['volumes']) == 2
+
+
+@pytest.mark.plugin('slicer_cli_web')
+def test_direct_docker_run_multiple_files(mocker, server, file):
+    from girder.models.file import File
+
+    docker_run_mock = mocker.patch(
+        'slicer_cli_web.girder_worker_plugin.direct_docker_run._docker_run')
+    docker_run_mock.return_value = []
+
+    gc_mock = MockedGirderClient()
+
+    path = File().getLocalFilePath(file)
+
+    run(image='test', container_args=[CommaJoinedVolumes([
+        DirectGirderFileIdToVolume(file['_id'], filename='direct.dat',
+                                   direct_file_path=path, gc=gc_mock),
+        DirectGirderFileIdToVolume(file['_id'], filename='downloaded.dat',
+                                   direct_file_path=None, gc=gc_mock),
+    ])])
+
+    docker_run_mock.assert_called_once()
+    kwargs = docker_run_mock.call_args[1]
+    first, second = kwargs['container_args'][0].split(',')
+    assert first == '%s/direct.dat' % TEMP_VOLUME_DIRECT_MOUNT_PREFIX
+    # the second file has no direct path, so it falls back to a download
+    assert second.endswith('/downloaded.dat')
+    assert not second.startswith(TEMP_VOLUME_DIRECT_MOUNT_PREFIX)
+    # one bind mount and the temporary volume
+    assert len(kwargs['volumes']) == 2
+
+
+@pytest.mark.plugin('slicer_cli_web')
+@pytest.mark.parametrize('canceled', [True, False])
+def test_direct_docker_run_canceled_skips_result_hooks(mocker, canceled):
+    docker_run_mock = mocker.patch(
+        'slicer_cli_web.girder_worker_plugin.direct_docker_run._docker_run')
+    docker_run_mock.return_value = (None, )
+
+    hook = mock.Mock()
+    run.push_request(girder_result_hooks=[hook])
+    try:
+        if canceled:
+            # stand in for the docker loop having latched the cancel mid-run
+            run.request._slicer_cli_web_canceled = True
+        run(image='test', container_args=[])
+    finally:
+        run.pop_request()
+
+    docker_run_mock.assert_called_once()
+    # a canceled run must not upload the outputs its stopped container skipped
+    if canceled:
+        hook.transform.assert_not_called()
+    else:
+        hook.transform.assert_called_once()
+
+
+@pytest.mark.plugin('slicer_cli_web')
+def test_direct_docker_run_cancel_is_latched(mocker):
+    # once the broker reports the revocation, a later inspection that times out
+    # to False must not un-cancel the run.
+    mocker.patch('girder_worker.task.is_revoked', side_effect=[True, False, False])
+
+    run.push_request()
+    try:
+        assert run.canceled
+        assert run.canceled
+    finally:
+        run.pop_request()
